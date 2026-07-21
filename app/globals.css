@@ -1,0 +1,13 @@
+@import url("https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Inter:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-emerald-50 text-ink-900 font-body;
+}
+
+.card {
+  @apply bg-white rounded-xl2 border border-ink-100 shadow-sm;
+}
