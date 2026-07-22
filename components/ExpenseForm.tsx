@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { Expense } from "@/lib/types";
-import { CATEGORIES } from "@/lib/nlp";
 import { CATEGORIES } from "@/lib/categories";
+
 export default function ExpenseForm({
   onClose,
   onCreated,
