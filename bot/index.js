@@ -92,6 +92,7 @@ Règles :
 - Si le montant est absent ou ambigu, ou si la catégorie est vraiment impossible à déduire, renvoie needs_clarification = true et pose une question courte en français dans clarification_question.
 - La "description" doit être un résumé court et naturel.
 - Déduis la catégorie même si elle n'est pas explicite (taxi/essence/moto -> transport ; riz/restaurant/marché -> nourriture ; école -> éducation).
+- Le champ "amount" doit être un NOMBRE JSON (ex: 2000), jamais une chaîne de texte (donc pas "2000").
 - Réponds UNIQUEMENT en JSON valide, sans texte autour, format exact :
 {"amount": number|null, "category": string|null, "description": string, "needs_clarification": boolean, "clarification_question": string|null}`;
 
@@ -116,11 +117,21 @@ Règles :
     const cleaned = raw.replace(/```json|```/g, "").trim();
     const parsed = JSON.parse(cleaned);
 
+    const finalAmount =
+      parsed.amount !== null &&
+      parsed.amount !== undefined &&
+      !isNaN(Number(parsed.amount))
+        ? Number(parsed.amount)
+        : null;
+    const finalCategory = CATEGORIES.includes(parsed.category)
+      ? parsed.category
+      : null;
+
     return {
-      amount: typeof parsed.amount === "number" ? parsed.amount : null,
-      category: CATEGORIES.includes(parsed.category) ? parsed.category : null,
+      amount: finalAmount,
+      category: finalCategory,
       description: parsed.description || message,
-      needs_clarification: Boolean(parsed.needs_clarification),
+      needs_clarification: finalAmount === null || finalCategory === null,
       clarification_question: parsed.clarification_question || null,
     };
   } catch (err) {
