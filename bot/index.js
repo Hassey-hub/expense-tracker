@@ -16,8 +16,6 @@ if (!TELEGRAM_TOKEN || !API_BASE_URL || !BOT_API_SECRET) {
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// Mémoire simple en RAM : question de clarification en attente par chat
-// (pour une charge élevée, remplacer par Redis ou une table Supabase)
 const pendingClarifications = new Map();
 
 const CATEGORIES = [
@@ -132,32 +130,42 @@ Règles :
 }
 
 async function saveExpense(chatId, { amount, category, description }) {
-  const res = await fetch(`${API_BASE_URL}/api/bot/add-expense`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-bot-secret": BOT_API_SECRET,
-    },
-    body: JSON.stringify({
-      telegram_chat_id: String(chatId),
-      amount,
-      category,
-      description,
-    }),
-  });
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/bot/add-expense`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-bot-secret": BOT_API_SECRET,
+      },
+      body: JSON.stringify({
+        telegram_chat_id: String(chatId),
+        amount,
+        category,
+        description,
+      }),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("Erreur réseau lors de l'enregistrement de la dépense:", err.message);
+    return { error: "Impossible de contacter le serveur. Réessayez dans un instant." };
+  }
 }
 
 async function linkAccount(chatId, code) {
-  const res = await fetch(`${API_BASE_URL}/api/bot/link`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-bot-secret": BOT_API_SECRET,
-    },
-    body: JSON.stringify({ code, telegram_chat_id: String(chatId) }),
-  });
-  return res.json();
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/bot/link`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-bot-secret": BOT_API_SECRET,
+      },
+      body: JSON.stringify({ code, telegram_chat_id: String(chatId) }),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("Erreur réseau lors de la liaison du compte:", err.message);
+    return { error: "Impossible de contacter le serveur. Réessayez dans un instant." };
+  }
 }
 
 bot.onText(/\/start/, (msg) => {
@@ -192,55 +200,62 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  if (!text || text.startsWith("/")) return; // /start et /link déjà gérés
+  if (!text || text.startsWith("/")) return;
 
-  // Si une clarification était en attente pour ce chat, on complète la dépense précédente
-  const pending = pendingClarifications.get(chatId);
-  if (pending) {
-    pendingClarifications.delete(chatId);
+  try {
+    const pending = pendingClarifications.get(chatId);
+    if (pending) {
+      pendingClarifications.delete(chatId);
 
-    if (pending.missing === "amount") {
-      const amountMatch = text.match(/(\d[\d\s.,]*)/);
-      const amount = amountMatch
-        ? parseFloat(amountMatch[1].replace(/\s/g, "").replace(",", "."))
-        : null;
-      if (!amount) {
-        bot.sendMessage(chatId, "Je n'ai pas compris le montant. Réessayez, par exemple : 5000");
-        return;
+      if (pending.missing === "amount") {
+        const amountMatch = text.match(/(\d[\d\s.,]*)/);
+        const amount = amountMatch
+          ? parseFloat(amountMatch[1].replace(/\s/g, "").replace(",", "."))
+          : null;
+        if (!amount) {
+          bot.sendMessage(chatId, "Je n'ai pas compris le montant. Réessayez, par exemple : 5000");
+          return;
+        }
+        pending.data.amount = amount;
+      } else if (pending.missing === "category") {
+        const lower = text.toLowerCase().trim();
+        const match = CATEGORIES.find((c) => lower.includes(c));
+        pending.data.category = match || "autre";
       }
-      pending.data.amount = amount;
-    } else if (pending.missing === "category") {
-      const lower = text.toLowerCase().trim();
-      const match = CATEGORIES.find((c) => lower.includes(c));
-      pending.data.category = match || "autre";
+
+      await finalizeExpense(chatId, pending.data);
+      return;
     }
 
-    await finalizeExpense(chatId, pending.data);
-    return;
-  }
+    bot.sendChatAction(chatId, "typing");
+    const parsed = await parseExpenseMessage(text);
 
-  bot.sendChatAction(chatId, "typing");
-  const parsed = await parseExpenseMessage(text);
+    if (parsed.needs_clarification) {
+      const missing = parsed.amount === null ? "amount" : "category";
+      pendingClarifications.set(chatId, {
+        missing,
+        data: {
+          amount: parsed.amount,
+          category: parsed.category,
+          description: parsed.description,
+        },
+      });
+      bot.sendMessage(chatId, `🤔 ${parsed.clarification_question}`);
+      return;
+    }
 
-  if (parsed.needs_clarification) {
-    const missing = parsed.amount === null ? "amount" : "category";
-    pendingClarifications.set(chatId, {
-      missing,
-      data: {
-        amount: parsed.amount,
-        category: parsed.category,
-        description: parsed.description,
-      },
+    await finalizeExpense(chatId, {
+      amount: parsed.amount,
+      category: parsed.category,
+      description: parsed.description,
     });
-    bot.sendMessage(chatId, `🤔 ${parsed.clarification_question}`);
-    return;
+  } catch (err) {
+    console.error("Erreur inattendue dans le traitement du message:", err);
+    bot.sendMessage(
+      chatId,
+      "❌ Une erreur inattendue est survenue. Réessayez, ou reformulez votre message."
+    );
   }
-
-  await finalizeExpense(chatId, {
-    amount: parsed.amount,
-    category: parsed.category,
-    description: parsed.description,
-  });
 });
 
 async function finalizeExpense(chatId, data) {
